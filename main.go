@@ -52,70 +52,51 @@ const (
 )
 
 func main() {
-	selectors := []struct {
-		selector   string
-		combinator string
-	}{
-		{selector: "a-tag", combinator: ">"},
-		{selector: ".b-selector", combinator: "+"},
-		{selector: ".c-selector.d-selector"},
+	rule1 := CssRule{
+		selector: CssCompoundSelector([]CssSelector{
+			{selector: "a-tag", combinator: ">"},
+			{selector: ".b-selector", combinator: "+"},
+			{selector: ".c-selector.d-selector"},
+		}),
+		properties: []CssProperty{
+			{name: "display", value: []string{"flex"}},
+			{name: "color", value: []string{"yellow"}},
+			{name: "transform", value: []string{"translate(10%, 10%)", "scale(1.2)", "rotate(160deg)"}},
+		},
 	}
 
-	properties := []struct {
-		name  string
-		value string
-	}{
-		{name: "display", value: "flex"},
-		{name: "color", value: "yellow"},
-		{name: "transform", value: "translate(10%, 10%) scale(1.2)"},
+	rule2 := CssRule{
+		selector: CssCompoundSelector([]CssSelector{
+			{selector: "c-tag", combinator: "~"},
+			{selector: ".f-selector.g-selector"},
+		}),
+		properties: []CssProperty{
+			{name: "padding", value: []string{"12px", "12px", "12px", "12px"}},
+		},
 	}
 
-	// Fold into single doc
-	docSelectors := _nil()
-	for _, selector := range selectors {
-		list := []Doc{text(selector.selector)}
-		if selector.combinator != "" {
-			list = append(list, []Doc{
-				text(" "),
-				text(selector.combinator),
-			}...)
-		}
-		single := concatList(list)
+	var file CssFile = []CssRule{rule1, rule2}
+	doc := file.toDoc()
 
-		docSelectors = concatWithBreak(docSelectors, single)
-	}
-	docSelectors = group(docSelectors)
-
-	// Fold into single doc
-	docProperties := _nil()
-	for _, property := range properties {
-		single := concatList([]Doc{
-			text(property.name),
-			text(": "),
-			text(property.value),
-			text(";"),
-		})
-
-		docProperties = concatWithBreak(docProperties, single)
-	}
-	docProperties = concatList([]Doc{
-		text("{"),
-		// Nest must appear before line break
-		// We want nest to increase the indentation level first, then the line break happens
-		nest(concatList([]Doc{
-			_break(),
-			docProperties,
-		}), 2),
-		_break(),
-		text("}"),
-	})
-
-	block := concatList([]Doc{docSelectors, text(" "), docProperties})
-	widths := []int{10, 25, 80}
+	widths := []int{40, 50, 60}
 	for _, w := range widths {
-		formatted := format(block, w)
-		fmt.Printf("Format with width %v: %s\n", w, formatted)
+		pretty := format(doc, w)
+		fmt.Printf("%s\nPrint with width %v\n%s\n", strings.Repeat("-", 32), w, pretty)
 	}
+}
+
+type ToDoc interface {
+	toDoc() Doc
+}
+
+// Concat everything and add breaks in between
+func fold[T ToDoc](list []T) Doc {
+	doc := _nil()
+	for _, i := range list {
+		doc = concatWithBreak(doc, i.toDoc())
+	}
+
+	return doc
 }
 
 // Doc constructors
@@ -173,6 +154,20 @@ func concatList(ds []Doc) Doc {
 	return doc
 }
 
+// Concat two docs with a break in between
+// If either of doc is a NilDoc, don't add the break
+func concatWithBreak(d1 Doc, d2 Doc) Doc {
+	if _, ok := d1.(DocNil); ok {
+		return d2
+	}
+
+	if _, ok := d2.(DocNil); ok {
+		return d1
+	}
+
+	return concat(concat(d1, _break()), d2)
+}
+
 // Increase indentation level of a doc
 // Identation only takes effect when a break happens. After a break, indent the new
 // line with the current indentation level
@@ -202,27 +197,13 @@ func group(d Doc) Doc {
 	}
 }
 
-// Concat two docs with a break in between
-// If either of doc is a NilDoc, don't add the break
-func concatWithBreak(d1 Doc, d2 Doc) Doc {
-	if _, ok := d1.(DocNil); ok {
-		return d2
-	}
-
-	if _, ok := d2.(DocNil); ok {
-		return d1
-	}
-
-	return concat(concat(d1, _break()), d2)
-}
-
 // Given the width of the current line returns whether this doc can fit in one single line
 func (d *DocGroup) fits(width int) bool {
 	// There are situations where the doc certainly can not fit in one line, but we still have to
 	// consider it as fits. For example, a really long text with no break. So we need at least a break
 	// to consider the document does not fit. A document with no breaks automatically fits
 	encounteredBreak := false
-	docs := []Doc{d}
+	docs := []Doc{*d}
 	c := 0
 	breakMode := Flat
 
@@ -257,6 +238,7 @@ func (d *DocGroup) fits(width int) bool {
 			}
 
 		case DocNest:
+			docs = append([]Doc{doc.payload}, docs...)
 			continue
 
 		case DocCons:
@@ -313,7 +295,7 @@ func format(d Doc, width int) string {
 			case Broken, None:
 				// Breaks outside of groups is always rendered as new lines
 				output += "\n" + strings.Repeat(" ", head.indentation)
-				columns += len([]rune(doc.payload))
+				columns = head.indentation
 			}
 			continue
 
@@ -347,6 +329,7 @@ func format(d Doc, width int) string {
 				indentation: head.indentation,
 				doc:         doc.payload,
 			}
+
 			if doc.fits(width - columns) {
 				toPrepend.breakMode = Flat
 			} else {
